@@ -1,0 +1,69 @@
+{
+  "name": "agent-web",
+  "version": "0.1.0",
+  "description": "Unified web content fetching and browser automation for AI agents",
+  "license": "MIT",
+  "author": "lalawgwg99",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lalawgwg99/agent-web.git"
+  },
+  "keywords": [
+    "mcp",
+    "browser",
+    "automation",
+    "ai-agent",
+    "web-scraping",
+    "playwright",
+    "snapshot",
+    "claude",
+    "cursor"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agent-web": "./dist/bin/agent-web.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/",
+    "src/skills/SKILL.md",
+    "README.md",
+    "README_en.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "commander": "^13.1.0",
+    "rss-parser": "^3.13.0",
+    "yaml": "^2.7.1",
+    "zod": "^3.25.3"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.52.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

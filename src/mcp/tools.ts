@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Router } from "../core/router.js";
-import { getSession, hasSession } from "../browser/manager.js";
+import { getSession, hasSession, setupResourceBlocking, unblockResources } from "../browser/manager.js";
 import { takeSnapshot } from "../browser/snapshot.js";
 import { performAction, type ActionType } from "../browser/actions.js";
 import { RefMap } from "../browser/ref-map.js";
@@ -8,6 +8,7 @@ import { isDomainAllowed } from "../browser/security.js";
 import { wrapContentBoundary } from "../browser/security.js";
 import { loadConfig } from "../core/config.js";
 import { runDoctor, formatDoctorReport } from "../core/doctor.js";
+import { extractReadableContent } from "../browser/readability.js";
 
 // 每個 MCP session 共享的狀態
 const sessionRefMaps = new Map<string, RefMap>();
@@ -91,12 +92,23 @@ export function getTools(): ToolDef[] {
           .optional()
           .default("default")
           .describe("Session name for isolation"),
+        cdp: z
+          .string()
+          .optional()
+          .describe("CDP WebSocket URL to connect to user's browser (e.g. ws://localhost:9222)"),
+        readable: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("Return clean article text instead of ARIA snapshot (for reading, not interaction)"),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
       handler: async (input) => {
-        const { url, session: sessionName } = input as {
+        const { url, session: sessionName, cdp, readable } = input as {
           url: string;
           session: string;
+          cdp?: string;
+          readable: boolean;
         };
 
         const config = loadConfig();
@@ -108,8 +120,28 @@ export function getTools(): ToolDef[] {
           };
         }
 
-        const browserSession = await getSession(sessionName);
+        const browserSession = await getSession(sessionName, { cdp });
         await browserSession.page.goto(url, { waitUntil: "domcontentloaded" });
+
+        if (readable) {
+          const article = await extractReadableContent(browserSession.page);
+          if (!article) {
+            return {
+              content: [
+                { type: "text", text: "Readability could not extract article content. Try without readable=true for ARIA snapshot." },
+              ],
+            };
+          }
+          const output = [
+            `**Page:** ${article.title}`,
+            `**URL:** ${article.url}`,
+            `**Tokens:** ~${article.tokenEstimate}`,
+            ...(article.byline ? [`**Author:** ${article.byline}`] : []),
+            "",
+            wrapContentBoundary(article.content),
+          ].join("\n");
+          return { content: [{ type: "text", text: output }] };
+        }
 
         const refMap = getRefMap(sessionName);
         const snapshot = await takeSnapshot(browserSession.page, refMap, {
@@ -138,13 +170,19 @@ export function getTools(): ToolDef[] {
           .boolean()
           .optional()
           .default(true)
-          .describe("Only show interactive elements"),
+          .describe("Only show interactive elements (ignored when mode=readable)"),
+        mode: z
+          .enum(["interactive", "readable"])
+          .optional()
+          .default("interactive")
+          .describe("Extraction mode: 'interactive' for ARIA tree with @refs, 'readable' for clean article text"),
         session: z.string().optional().default("default"),
       }),
       annotations: { readOnlyHint: true },
       handler: async (input) => {
-        const { interactiveOnly, session: sessionName } = input as {
+        const { interactiveOnly, mode, session: sessionName } = input as {
           interactiveOnly: boolean;
+          mode: string;
           session: string;
         };
 
@@ -160,6 +198,27 @@ export function getTools(): ToolDef[] {
         }
 
         const browserSession = await getSession(sessionName);
+
+        if (mode === "readable") {
+          const article = await extractReadableContent(browserSession.page);
+          if (!article) {
+            return {
+              content: [
+                { type: "text", text: "Readability could not extract article content. Try mode='interactive'." },
+              ],
+            };
+          }
+          const output = [
+            `**Page:** ${article.title}`,
+            `**URL:** ${article.url}`,
+            `**Tokens:** ~${article.tokenEstimate}`,
+            ...(article.byline ? [`**Author:** ${article.byline}`] : []),
+            "",
+            wrapContentBoundary(article.content),
+          ].join("\n");
+          return { content: [{ type: "text", text: output }] };
+        }
+
         const refMap = getRefMap(sessionName);
         const snapshot = await takeSnapshot(browserSession.page, refMap, {
           interactiveOnly,
@@ -265,8 +324,22 @@ export function getTools(): ToolDef[] {
         }
 
         const browserSession = await getSession(sessionName);
+        const config = loadConfig();
+        const hasBlocking = (config.browser.blockResources ?? []).length > 0;
+
+        // Temporarily unblock resources for visual screenshot
+        if (hasBlocking) {
+          await unblockResources(browserSession.page);
+          await browserSession.page.reload({ waitUntil: "load" });
+        }
+
         const buffer = await browserSession.page.screenshot({ fullPage });
         const base64 = buffer.toString("base64");
+
+        // Re-apply blocking after screenshot
+        if (hasBlocking) {
+          await setupResourceBlocking(browserSession.page, config.browser.blockResources);
+        }
 
         return {
           content: [{ type: "image", data: base64, mimeType: "image/png" } as unknown as { type: string; text: string }],

@@ -44,18 +44,9 @@ const INTERACTIVE_ROLES = new Set([
   "treeitem",
 ]);
 
-interface AXNode {
-  role: string;
-  name?: string;
-  value?: string;
-  checked?: boolean;
-  disabled?: boolean;
-  level?: number;
-  children?: AXNode[];
-}
-
 /**
  * 從 Playwright Page 取得 snapshot
+ * 使用 locator.ariaSnapshot() API（Playwright 1.49+）
  */
 export async function takeSnapshot(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -63,11 +54,11 @@ export async function takeSnapshot(
   refMap: RefMap,
   options: { interactiveOnly?: boolean } = {},
 ): Promise<SnapshotResult> {
-  const axTree = await page.accessibility.snapshot({ interestingOnly: true });
+  const ariaYaml: string = await page.locator("body").ariaSnapshot();
 
   refMap.clear();
 
-  const tree = axTree ? processNode(axTree, refMap, options.interactiveOnly ?? true) : [];
+  const tree = parseAriaYaml(ariaYaml, refMap, options.interactiveOnly ?? true);
   const text = renderTreeToText(tree, 0);
 
   return {
@@ -80,44 +71,126 @@ export async function takeSnapshot(
   };
 }
 
-function processNode(
-  node: AXNode,
+/**
+ * 解析 ariaSnapshot() 回傳的 YAML 格式
+ * 格式範例：
+ *   - heading "Example Domain" [level=1]
+ *   - link "Learn more":
+ *     - /url: https://example.com
+ */
+function parseAriaYaml(
+  yaml: string,
   refMap: RefMap,
   interactiveOnly: boolean,
 ): SnapshotNode[] {
-  const results: SnapshotNode[] = [];
-  const isInteractive = INTERACTIVE_ROLES.has(node.role);
+  const lines = yaml.split("\n");
+  const root: SnapshotNode[] = [];
+  const stack: { indent: number; children: SnapshotNode[] }[] = [
+    { indent: -1, children: root },
+  ];
 
-  if (!interactiveOnly || isInteractive) {
-    const ref = isInteractive ? refMap.assign(node.role, node.name ?? "") : "";
+  for (const line of lines) {
+    // Skip empty lines and metadata lines (like /url:)
+    if (!line.trim() || line.trim().startsWith("/")) continue;
 
-    const snapshotNode: SnapshotNode = {
-      ref,
-      role: node.role,
-      name: node.name ?? "",
-      ...(node.value !== undefined && { value: node.value }),
-      ...(node.checked !== undefined && { checked: node.checked }),
-      ...(node.disabled && { disabled: true }),
-      ...(node.level !== undefined && { level: node.level }),
-    };
+    const match = line.match(/^(\s*)- (\w+)(.*)/);
+    if (!match) continue;
 
-    if (node.children?.length) {
-      const children = node.children.flatMap((child) =>
-        processNode(child, refMap, interactiveOnly),
-      );
-      if (children.length > 0) {
-        snapshotNode.children = children;
+    const indent = match[1]!.length;
+    const role = match[2]!;
+    let rest = match[3]!.trim();
+
+    // Skip metadata entries
+    if (role === "text" && rest.startsWith(":")) continue;
+
+    // Parse name (quoted string after role)
+    let name = "";
+    const nameMatch = rest.match(/^"(.+?)"/);
+    if (nameMatch) {
+      name = nameMatch[1]!;
+      rest = rest.slice(nameMatch[0].length).trim();
+    } else if (rest.startsWith(":")) {
+      // "- text: Some text" format
+      name = rest.slice(1).trim();
+      rest = "";
+    }
+
+    // Parse attributes like [level=1], [checked], [disabled]
+    let level: number | undefined;
+    let checked: boolean | undefined;
+    let disabled = false;
+
+    const attrMatch = rest.match(/\[([^\]]+)\]/g);
+    if (attrMatch) {
+      for (const attr of attrMatch) {
+        const inner = attr.slice(1, -1);
+        if (inner.startsWith("level=")) {
+          level = parseInt(inner.slice(6), 10);
+        } else if (inner === "checked") {
+          checked = true;
+        } else if (inner === "unchecked") {
+          checked = false;
+        } else if (inner === "disabled") {
+          disabled = true;
+        }
       }
     }
 
-    results.push(snapshotNode);
-  } else if (node.children) {
-    for (const child of node.children) {
-      results.push(...processNode(child, refMap, interactiveOnly));
+    const isInteractive = INTERACTIVE_ROLES.has(role);
+
+    if (interactiveOnly && !isInteractive) {
+      // Non-interactive: we still need to track indent for tree structure,
+      // but won't add a node. Its children may be interactive though.
+      // Add a transparent container
+      while (stack.length > 1 && stack[stack.length - 1]!.indent >= indent) {
+        stack.pop();
+      }
+      // Push a virtual container so interactive children get added to parent
+      stack.push({ indent, children: stack[stack.length - 1]!.children });
+      continue;
     }
+
+    const ref = isInteractive ? refMap.assign(role, name) : "";
+
+    const node: SnapshotNode = {
+      ref,
+      role,
+      name,
+      ...(level !== undefined && { level }),
+      ...(checked !== undefined && { checked }),
+      ...(disabled && { disabled }),
+    };
+
+    // Find the correct parent based on indentation
+    while (stack.length > 1 && stack[stack.length - 1]!.indent >= indent) {
+      stack.pop();
+    }
+
+    const parent = stack[stack.length - 1]!;
+    parent.children.push(node);
+
+    // This node can be a parent for deeper-indented nodes
+    const nodeChildren: SnapshotNode[] = [];
+    node.children = nodeChildren;
+    stack.push({ indent, children: nodeChildren });
   }
 
-  return results;
+  // Clean up: remove empty children arrays
+  cleanEmptyChildren(root);
+
+  return root;
+}
+
+function cleanEmptyChildren(nodes: SnapshotNode[]): void {
+  for (const node of nodes) {
+    if (node.children) {
+      if (node.children.length === 0) {
+        delete node.children;
+      } else {
+        cleanEmptyChildren(node.children);
+      }
+    }
+  }
 }
 
 /**
@@ -147,6 +220,9 @@ function renderTreeToText(nodes: SnapshotNode[], indent: number): string {
     }
     if (node.disabled) {
       line += " [disabled]";
+    }
+    if (node.level !== undefined) {
+      line += ` [level=${node.level}]`;
     }
 
     lines.push(line);

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { getSession } from "../../browser/manager.js";
 import { takeSnapshot } from "../../browser/snapshot.js";
+import { extractReadableContent } from "../../browser/readability.js";
 import { RefMap } from "../../browser/ref-map.js";
 import { isDomainAllowed } from "../../browser/security.js";
 import { loadConfig } from "../../core/config.js";
@@ -15,6 +16,10 @@ export function registerOpenCommand(program: Command): void {
     .description("Open URL in browser, returns snapshot with @refs")
     .option("--headed", "Show browser window")
     .option("--session <name>", "Named session", "default")
+    .option("--cdp <url>", "Connect via CDP WebSocket URL (e.g. ws://localhost:9222)")
+    .option("--cdp-port <port>", "Connect via CDP port (auto-discovers WebSocket URL)", parseInt)
+    .option("--no-block", "Disable resource blocking (load images, fonts, etc.)")
+    .option("--readable", "Extract clean article text instead of ARIA snapshot")
     .action(async (url: string, opts) => {
       try {
         const config = loadConfig();
@@ -25,9 +30,27 @@ export function registerOpenCommand(program: Command): void {
 
         const session = await getSession(opts.session as string, {
           headed: opts.headed as boolean,
+          cdp: opts.cdp as string | undefined,
+          cdpPort: opts.cdpPort as number | undefined,
+          blockResources: opts.block as boolean,
         });
 
         await session.page.goto(url, { waitUntil: "domcontentloaded" });
+
+        if (opts.readable) {
+          const article = await extractReadableContent(session.page);
+          if (!article) {
+            console.error("Readability could not extract article content from this page.");
+            process.exit(1);
+          }
+          console.log(`Page: ${article.title}`);
+          console.log(`URL: ${article.url}`);
+          console.log(`Tokens: ~${article.tokenEstimate}`);
+          if (article.byline) console.log(`Author: ${article.byline}`);
+          console.log("");
+          console.log(article.content);
+          return;
+        }
 
         const snapshot = await takeSnapshot(session.page, globalRefMap, {
           interactiveOnly: true,

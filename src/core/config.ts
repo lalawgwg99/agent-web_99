@@ -9,6 +9,11 @@ export interface AgentWebConfig {
     defaultTimeout: number;
     viewport: { width: number; height: number };
     allowedDomains?: string[];
+    cdp?: {
+      url?: string;
+      port?: number;
+    };
+    blockResources?: string[];
   };
   platforms: {
     twitter?: { cookies: string };
@@ -29,6 +34,7 @@ const DEFAULT_CONFIG: AgentWebConfig = {
     headless: true,
     defaultTimeout: 25_000,
     viewport: { width: 1280, height: 720 },
+    blockResources: ["image", "font", "media"],
   },
   platforms: {},
   adapters: {},

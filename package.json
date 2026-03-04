@@ -1,6 +1,6 @@
 {
-  "name": "agent-web",
-  "version": "0.1.0",
+  "name": "@jazzxx/agent-web",
+  "version": "0.1.1",
   "description": "Unified web content fetching and browser automation for AI agents",
   "license": "MIT",
   "author": "lalawgwg99",
@@ -23,7 +23,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "agent-web": "./dist/bin/agent-web.js"
+    "agent-web": "dist/bin/agent-web.js"
   },
   "exports": {
     ".": {
@@ -49,6 +49,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@mozilla/readability": "^0.6.0",
     "commander": "^13.1.0",
     "rss-parser": "^3.13.0",
     "yaml": "^2.7.1",

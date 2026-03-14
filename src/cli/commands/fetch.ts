@@ -11,6 +11,7 @@ export function registerFetchCommand(program: Command): void {
     .option("--max-length <n>", "Max content length", parseInt)
     .option("--lang <code>", "Preferred language")
     .option("--timeout <ms>", "Timeout in milliseconds", parseInt)
+    .option("--no-cache", "Bypass cache and fetch fresh")
     .action(async (url: string, opts) => {
       try {
         const router = new Router();
@@ -18,6 +19,7 @@ export function registerFetchCommand(program: Command): void {
           maxLength: opts.maxLength as number | undefined,
           lang: opts.lang as string | undefined,
           timeout: opts.timeout as number | undefined,
+          noCache: opts.cache === false,
         };
 
         const result = opts.adapter

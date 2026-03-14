@@ -1,9 +1,11 @@
 import type { Adapter, AdapterOptions, FetchResult } from "../adapters/types.js";
 import { AdapterRegistry, loadBuiltinAdapters } from "../adapters/registry.js";
+import { getCached, setCache } from "./cache.js";
 
 /**
  * 智慧路由器
  * URL 進來 → 自動選最佳 Adapter → 失敗自動降級
+ * 支援 TTL 快取、指數退避重試
  */
 export class Router {
   private registry: AdapterRegistry;
@@ -42,26 +44,100 @@ export class Router {
   }
 
   /**
-   * 智慧抓取：自動選 adapter + 失敗自動降級
+   * Check if an error is retryable (network/timeout/5xx only, not 4xx)
    */
-  async fetch(url: string, options?: AdapterOptions): Promise<FetchResult> {
+  private isRetryableError(err: unknown): boolean {
+    if (!(err instanceof Error)) return false;
+    const msg = err.message.toLowerCase();
+    // Retry on network errors, timeouts, 5xx
+    if (msg.includes("timeout") || msg.includes("timed out")) return true;
+    if (msg.includes("econnrefused") || msg.includes("enotfound") || msg.includes("econnreset")) return true;
+    if (msg.includes("network") || msg.includes("fetch failed")) return true;
+    // 5xx errors
+    if (/http 5\d\d/.test(msg) || /status 5\d\d/.test(msg)) return true;
+    // Don't retry 4xx client errors
+    if (/http 4\d\d/.test(msg) || /status 4\d\d/.test(msg)) return false;
+    return false;
+  }
+
+  /**
+   * Delay helper
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Try fetching with an adapter, with retry + exponential backoff.
+   * MaxRetries: 2 extra attempts (3 total), backoff: 500ms → 1000ms → 2000ms
+   */
+  private async fetchWithRetry(
+    adapter: Adapter,
+    url: string,
+    options?: AdapterOptions,
+    maxRetries = 2,
+  ): Promise<FetchResult> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await adapter.fetch(url, options);
+      } catch (err) {
+        lastError = err as Error;
+        if (attempt < maxRetries && this.isRetryableError(err)) {
+          const backoffMs = 500 * Math.pow(2, attempt); // 500, 1000, 2000
+          console.error(
+            `[retry] adapter=${adapter.name} attempt=${attempt + 1}/${maxRetries + 1} backoff=${backoffMs}ms error=${lastError.message}`,
+          );
+          await this.delay(backoffMs);
+        } else {
+          // Non-retryable or last attempt — break immediately
+          throw err;
+        }
+      }
+    }
+
+    // Should not reach here, but satisfy TypeScript
+    throw lastError ?? new Error("Unexpected retry loop exit");
+  }
+
+  /**
+   * 智慧抓取：自動選 adapter + 失敗自動降級 + 快取
+   */
+  async fetch(
+    url: string,
+    options?: AdapterOptions & { noCache?: boolean },
+  ): Promise<FetchResult> {
     await this.init();
+
+    // Check cache (unless bypassed)
+    if (!options?.noCache) {
+      const cached = getCached<FetchResult>(url);
+      if (cached) return cached;
+    }
 
     const { primary, fallbacks } = this.resolve(url);
     const errors: Error[] = [];
 
-    // 嘗試主要 adapter
+    // 嘗試主要 adapter (with retry)
     try {
-      return await primary.fetch(url, options);
+      const result = await this.fetchWithRetry(primary, url, options);
+      if (!options?.noCache) {
+        setCache(url, result);
+      }
+      return result;
     } catch (err) {
       errors.push(err as Error);
     }
 
-    // 降級到備用 adapters
+    // 降級到備用 adapters (with retry)
     for (const fallback of fallbacks) {
       try {
-        const result = await fallback.fetch(url, options);
+        const result = await this.fetchWithRetry(fallback, url, options);
         result.metadata._fallbackFrom = primary.name;
+        if (!options?.noCache) {
+          setCache(url, result);
+        }
         return result;
       } catch (err) {
         errors.push(err as Error);

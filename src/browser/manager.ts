@@ -1,3 +1,4 @@
+import type { Browser, BrowserContext, Page, Route } from "playwright";
 import { type AgentWebConfig, loadConfig } from "../core/config.js";
 
 /**
@@ -26,12 +27,9 @@ async function getPlaywright(): Promise<PlaywrightModule> {
 }
 
 export interface BrowserSession {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  browser: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  context: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  page: any;
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
   isCDP: boolean;
 }
 
@@ -98,17 +96,17 @@ async function connectViaCDP(
   wsEndpoint: string,
   config: AgentWebConfig,
 ): Promise<BrowserSession> {
-  const browser = await pw.chromium.connectOverCDP(wsEndpoint);
+  const browser: Browser = await pw.chromium.connectOverCDP(wsEndpoint);
 
   // Use the default context (preserves user's cookies/login state)
   const contexts = browser.contexts();
-  const context =
+  const context: BrowserContext =
     contexts.length > 0
-      ? contexts[0]
+      ? contexts[0]!
       : await browser.newContext({ viewport: config.browser.viewport });
 
   // Create a new page (don't disturb user's existing tabs)
-  const page = await context.newPage();
+  const page: Page = await context.newPage();
   page.setDefaultTimeout(config.browser.defaultTimeout);
 
   return { browser, context, page, isCDP: true };
@@ -123,11 +121,11 @@ async function launchBrowser(
     ? false
     : (options?.headless ?? config.browser.headless);
 
-  const browser = await pw.chromium.launch({ headless });
-  const context = await browser.newContext({
+  const browser: Browser = await pw.chromium.launch({ headless });
+  const context: BrowserContext = await browser.newContext({
     viewport: config.browser.viewport,
   });
-  const page = await context.newPage();
+  const page: Page = await context.newPage();
   page.setDefaultTimeout(config.browser.defaultTimeout);
 
   return { browser, context, page, isCDP: false };
@@ -136,15 +134,14 @@ async function launchBrowser(
 // ─── Resource Blocking ───────────────────────────────────────
 
 export async function setupResourceBlocking(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  page: any,
+  page: Page,
   blockedTypes?: string[],
 ): Promise<void> {
   if (!blockedTypes || blockedTypes.length === 0) return;
 
   const blocked = new Set(blockedTypes);
 
-  await page.route("**/*", (route: { request: () => { resourceType: () => string }; abort: () => Promise<void>; continue: () => Promise<void> }) => {
+  await page.route("**/*", (route: Route) => {
     if (blocked.has(route.request().resourceType())) {
       route.abort();
     } else {
@@ -153,10 +150,7 @@ export async function setupResourceBlocking(
   });
 }
 
-export async function unblockResources(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  page: any,
-): Promise<void> {
+export async function unblockResources(page: Page): Promise<void> {
   await page.unrouteAll({ behavior: "wait" });
 }
 

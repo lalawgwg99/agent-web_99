@@ -5,6 +5,14 @@ import { AdapterRegistry, loadBuiltinAdapters } from "../adapters/registry.js";
  * 智慧路由器
  * URL 進來 → 自動選最佳 Adapter → 失敗自動降級
  */
+
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_BASE_DELAY_MS = 500;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class Router {
   private registry: AdapterRegistry;
   private initialized = false;
@@ -43,29 +51,41 @@ export class Router {
 
   /**
    * 智慧抓取：自動選 adapter + 失敗自動降級
+   * 每個 adapter 會重試最多 maxRetries 次（指數退避）
    */
-  async fetch(url: string, options?: AdapterOptions): Promise<FetchResult> {
+  async fetch(
+    url: string,
+    options?: AdapterOptions & { maxRetries?: number },
+  ): Promise<FetchResult> {
     await this.init();
 
     const { primary, fallbacks } = this.resolve(url);
+    const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
     const errors: Error[] = [];
 
-    // 嘗試主要 adapter
-    try {
-      return await primary.fetch(url, options);
-    } catch (err) {
-      errors.push(err as Error);
-    }
+    // 嘗試主要 adapter（含重試）
+    const primaryResult = await this.fetchWithRetry(
+      primary,
+      url,
+      options,
+      maxRetries,
+    );
+    if (primaryResult.ok) return primaryResult.value;
+    errors.push(primaryResult.error);
 
     // 降級到備用 adapters
     for (const fallback of fallbacks) {
-      try {
-        const result = await fallback.fetch(url, options);
-        result.metadata._fallbackFrom = primary.name;
-        return result;
-      } catch (err) {
-        errors.push(err as Error);
+      const result = await this.fetchWithRetry(
+        fallback,
+        url,
+        options,
+        maxRetries,
+      );
+      if (result.ok) {
+        result.value.metadata._fallbackFrom = primary.name;
+        return result.value;
       }
+      errors.push(result.error);
     }
 
     const messages = errors.map((e) => e.message).join("; ");
@@ -87,5 +107,32 @@ export class Router {
       throw new Error(`Adapter "${adapterName}" not found`);
     }
     return adapter.fetch(url, options);
+  }
+
+  /**
+   * 帶指數退避的重試封裝
+   */
+  private async fetchWithRetry(
+    adapter: Adapter,
+    url: string,
+    options: AdapterOptions | undefined,
+    maxRetries: number,
+  ): Promise<{ ok: true; value: FetchResult } | { ok: false; error: Error }> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const value = await adapter.fetch(url, options);
+        return { ok: true, value };
+      } catch (err) {
+        lastError = err as Error;
+        if (attempt < maxRetries) {
+          const delay = DEFAULT_BASE_DELAY_MS * Math.pow(2, attempt);
+          await sleep(delay);
+        }
+      }
+    }
+
+    return { ok: false, error: lastError! };
   }
 }

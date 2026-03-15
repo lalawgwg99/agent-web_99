@@ -49,6 +49,7 @@ export async function loadBuiltinAdapters(
     import("./bilibili.js"),
     import("./rss.js"),
     import("./xiaohongshu.js"),
+    import("./wikipedia.js"),
   ]);
 
   for (const result of modules) {

@@ -5,6 +5,65 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { getTools } from "./tools.js";
+import { type ZodType, ZodString, ZodNumber, ZodBoolean, ZodEnum, ZodOptional, ZodDefault } from "zod";
+
+/**
+ * Convert a Zod schema to a JSON Schema object for MCP tool listing.
+ * Preserves type information (string, number, boolean, enum) instead of
+ * hardcoding everything as "string".
+ */
+function zodToJsonSchema(schema: ZodType): Record<string, unknown> {
+  const shape = (schema as unknown as { shape?: Record<string, ZodType> }).shape;
+  if (!shape) return { type: "object", properties: {} };
+
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+
+  for (const [key, fieldSchema] of Object.entries(shape)) {
+    properties[key] = zodFieldToJsonSchema(fieldSchema);
+    if (!isOptional(fieldSchema)) {
+      required.push(key);
+    }
+  }
+
+  return {
+    type: "object",
+    properties,
+    ...(required.length > 0 && { required }),
+  };
+}
+
+function isOptional(schema: ZodType): boolean {
+  return schema instanceof ZodOptional || schema instanceof ZodDefault;
+}
+
+function zodFieldToJsonSchema(schema: ZodType): Record<string, unknown> {
+  // Unwrap optional/default wrappers
+  const inner = schema instanceof ZodOptional
+    ? schema._def.innerType
+    : schema instanceof ZodDefault
+      ? schema._def.innerType
+      : schema;
+
+  const description = (schema as unknown as { description?: string }).description;
+
+  let typeSchema: Record<string, unknown>;
+
+  if (inner instanceof ZodString) {
+    typeSchema = { type: "string" };
+  } else if (inner instanceof ZodNumber) {
+    typeSchema = { type: "number" };
+  } else if (inner instanceof ZodBoolean) {
+    typeSchema = { type: "boolean" };
+  } else if (inner instanceof ZodEnum) {
+    typeSchema = { type: "string", enum: (inner as unknown as { _def: { values: string[] } })._def.values };
+  } else {
+    typeSchema = { type: "string" };
+  }
+
+  if (description) typeSchema.description = description;
+  return typeSchema;
+}
 
 /**
  * MCP Server — STDIO 傳輸
@@ -32,17 +91,7 @@ export async function startServer(): Promise<void> {
       tools: tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        inputSchema: {
-          type: "object" as const,
-          properties: Object.fromEntries(
-            Object.entries(
-              (tool.inputSchema as { shape?: Record<string, unknown> }).shape ?? {},
-            ).map(([key, schema]) => [
-              key,
-              { type: "string", description: (schema as { description?: string }).description },
-            ]),
-          ),
-        },
+        inputSchema: zodToJsonSchema(tool.inputSchema),
         annotations: tool.annotations,
       })),
     };

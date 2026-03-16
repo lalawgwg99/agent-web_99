@@ -193,12 +193,21 @@ function cleanEmptyChildren(nodes: SnapshotNode[]): void {
   }
 }
 
+/** Pre-computed padding strings for common indent levels (avoids repeat per node) */
+const PAD_CACHE: string[] = [];
+function getPad(indent: number): string {
+  if (PAD_CACHE[indent] !== undefined) return PAD_CACHE[indent]!;
+  const pad = "  ".repeat(indent);
+  if (indent < 20) PAD_CACHE[indent] = pad;
+  return pad;
+}
+
 /**
  * 渲染為 AI 消費的扁平文字格式
  */
 function renderTreeToText(nodes: SnapshotNode[], indent: number): string {
   const lines: string[] = [];
-  const pad = "  ".repeat(indent);
+  const pad = getPad(indent);
 
   for (const node of nodes) {
     let line = pad;

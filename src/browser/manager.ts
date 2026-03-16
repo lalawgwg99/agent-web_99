@@ -45,6 +45,18 @@ export interface SessionOptions {
 
 const sessions = new Map<string, BrowserSession>();
 
+/** Cleanup callbacks invoked when a session is closed */
+type SessionCleanup = (name: string) => void;
+const sessionCleanupCallbacks: SessionCleanup[] = [];
+
+/**
+ * Register a callback that fires when a browser session is closed.
+ * Used to clean up associated state (e.g. RefMaps).
+ */
+export function onSessionClose(callback: SessionCleanup): void {
+  sessionCleanupCallbacks.push(callback);
+}
+
 // ─── CDP Endpoint Discovery ─────────────────────────────────
 
 async function resolveCdpEndpoint(
@@ -216,6 +228,11 @@ export async function closeSession(name = "default"): Promise<void> {
   }
   await session.browser.close();
   sessions.delete(name);
+
+  // Notify cleanup callbacks (e.g. RefMap cleanup in tools.ts)
+  for (const cb of sessionCleanupCallbacks) {
+    try { cb(name); } catch { /* non-critical */ }
+  }
 }
 
 /**

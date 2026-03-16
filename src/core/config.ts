@@ -48,18 +48,47 @@ function getConfigPath(): string {
   return path.join(getConfigDir(), "config.yaml");
 }
 
+/** In-memory config cache (invalidated on save) */
+let cachedConfig: AgentWebConfig | null = null;
+let configMtimeMs = 0;
+
+/**
+ * Load config with disk I/O caching.
+ * Re-reads from disk only if the file's mtime has changed since last read.
+ */
 export function loadConfig(): AgentWebConfig {
   const configPath = getConfigPath();
+
+  // Fast path: return cached if file hasn't changed
+  if (cachedConfig) {
+    try {
+      const stat = fs.statSync(configPath);
+      if (stat.mtimeMs === configMtimeMs) {
+        return cachedConfig;
+      }
+    } catch {
+      // File was deleted — return cached default
+      if (configMtimeMs === 0) return cachedConfig;
+    }
+  }
+
   if (!fs.existsSync(configPath)) {
-    return { ...DEFAULT_CONFIG };
+    cachedConfig = { ...DEFAULT_CONFIG };
+    configMtimeMs = 0;
+    return cachedConfig;
   }
 
   try {
+    const stat = fs.statSync(configPath);
     const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = parseYaml(raw) as Partial<AgentWebConfig>;
-    return { ...DEFAULT_CONFIG, ...parsed };
+    cachedConfig = { ...DEFAULT_CONFIG, ...parsed };
+    configMtimeMs = stat.mtimeMs;
+    return cachedConfig;
   } catch {
-    return { ...DEFAULT_CONFIG };
+    cachedConfig = { ...DEFAULT_CONFIG };
+    configMtimeMs = 0;
+    return cachedConfig;
   }
 }
 
@@ -72,6 +101,10 @@ export function saveConfig(config: AgentWebConfig): void {
     encoding: "utf-8",
     mode: 0o600,
   });
+
+  // Invalidate cache so next loadConfig() picks up new values
+  cachedConfig = null;
+  configMtimeMs = 0;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Router } from "../core/router.js";
-import { getSession, hasSession, setupResourceBlocking, unblockResources } from "../browser/manager.js";
+import { getSession, hasSession, setupResourceBlocking, unblockResources, onSessionClose } from "../browser/manager.js";
 import { takeSnapshot } from "../browser/snapshot.js";
 import { performAction, type ActionType } from "../browser/actions.js";
 import { RefMap } from "../browser/ref-map.js";
@@ -21,6 +21,11 @@ function getRefMap(sessionName: string): RefMap {
   }
   return refMap;
 }
+
+// Clean up RefMap when a browser session is closed (prevents memory leak)
+onSessionClose((name: string) => {
+  sessionRefMaps.delete(name);
+});
 
 /**
  * 工具定義與 handler

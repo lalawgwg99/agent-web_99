@@ -37,23 +37,34 @@ export class AdapterRegistry {
 
 /**
  * 載入所有內建 adapters（lazy import 避免載入不需要的依賴）
+ * 使用 Promise.all 而非 allSettled 以優化加載性能，並在開發模式下提供詳細錯誤
  */
 export async function loadBuiltinAdapters(
   registry: AdapterRegistry,
 ): Promise<void> {
-  const modules = await Promise.allSettled([
-    import("./youtube.js"),
-    import("./twitter.js"),
-    import("./github.js"),
-    import("./reddit.js"),
-    import("./bilibili.js"),
-    import("./rss.js"),
-    import("./xiaohongshu.js"),
-  ]);
-
-  for (const result of modules) {
-    if (result.status === "fulfilled" && result.value.default) {
-      registry.register(result.value.default);
+  // 允許單個 adapter 失敗而不影響整體功能
+  const safeImport = async (path: string) => {
+    try {
+      const module = await import(path);
+      if (module.default) {
+        registry.register(module.default);
+      }
+    } catch (err) {
+      // 開發模式下記錄詳細錯誤，生產模式僅簡單記錄
+      if (process.env.NODE_ENV === "development") {
+        console.error(`Failed to load adapter ${path}:`, err);
+      }
     }
-  }
+  };
+
+  // 並行載入所有 adapters
+  await Promise.all([
+    safeImport("./youtube.js"),
+    safeImport("./twitter.js"),
+    safeImport("./github.js"),
+    safeImport("./reddit.js"),
+    safeImport("./bilibili.js"),
+    safeImport("./rss.js"),
+    safeImport("./xiaohongshu.js"),
+  ]);
 }

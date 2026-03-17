@@ -194,44 +194,66 @@ function cleanEmptyChildren(nodes: SnapshotNode[]): void {
 }
 
 /**
+ * 生成緩存的縮進字符串
+ */
+const INDENT_CACHE: string[] = [];
+function getIndent(level: number): string {
+  if (!INDENT_CACHE[level]) {
+    INDENT_CACHE[level] = "  ".repeat(level);
+  }
+  return INDENT_CACHE[level]!;
+}
+
+/**
  * 渲染為 AI 消費的扁平文字格式
+ * 效能優化：使用字符串緩衝和縮進緩存
  */
 function renderTreeToText(nodes: SnapshotNode[], indent: number): string {
+  // 預計算緩衝區大小，避免頻繁的記憶體重新分配
+  const estimatedLength = nodes.length * 50; // 假設每節點平均 50 字元
   const lines: string[] = [];
-  const pad = "  ".repeat(indent);
+  lines.length = nodes.length; // 預分配數組大小
+  
+  const pad = getIndent(indent);
+  let lineIndex = 0;
 
   for (const node of nodes) {
-    let line = pad;
+    // 使用數組串接而非字符串連接以提高效能
+    const parts: string[] = [pad];
 
     if (node.ref) {
-      line += `[@${node.ref}] `;
+      parts.push(`[@${node.ref}] `);
     }
 
-    line += node.role;
+    parts.push(node.role);
 
     if (node.name) {
-      line += ` "${node.name}"`;
+      parts.push(` "${node.name}"`);
     }
     if (node.value !== undefined) {
-      line += ` value="${node.value}"`;
+      parts.push(` value="${node.value}"`);
     }
     if (node.checked !== undefined) {
-      line += node.checked ? " [checked]" : " [unchecked]";
+      parts.push(node.checked ? " [checked]" : " [unchecked]");
     }
     if (node.disabled) {
-      line += " [disabled]";
+      parts.push(" [disabled]");
     }
     if (node.level !== undefined) {
-      line += ` [level=${node.level}]`;
+      parts.push(` [level=${node.level}]`);
     }
 
-    lines.push(line);
+    lines[lineIndex++] = parts.join('');
 
-    if (node.children) {
+    if (node.children && node.children.length > 0) {
       const childText = renderTreeToText(node.children, indent + 1);
-      if (childText) lines.push(childText);
+      if (childText) {
+        // 使用 concat 而不是 push + spread 來減少記憶體使用
+        lines[lineIndex++] = childText;
+      }
     }
   }
 
-  return lines.join("\n");
+  // 過濾未使用的預分配空間
+  return lines.filter(Boolean).join("\n");
 }

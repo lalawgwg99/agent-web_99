@@ -209,8 +209,7 @@ function getIndent(level: number): string {
  * 效能優化：使用字符串緩衝和縮進緩存
  */
 function renderTreeToText(nodes: SnapshotNode[], indent: number): string {
-  // 預計算緩衝區大小，避免頻繁的記憶體重新分配
-  const estimatedLength = nodes.length * 50; // 假設每節點平均 50 字元
+  // 不需要預先估計長度，只預分配陣列
   const lines: string[] = [];
   lines.length = nodes.length; // 預分配數組大小
   

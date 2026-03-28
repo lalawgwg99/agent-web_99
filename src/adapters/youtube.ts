@@ -6,6 +6,48 @@ import type {
 } from "./types.js";
 import { exec, commandExists } from "../utils/exec.js";
 import { estimateTokens } from "../utils/tokens.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+
+/**
+ * Parse a WebVTT subtitle string into plain readable text.
+ * Strips timestamps, cue headers, VTT tags and deduplicates adjacent identical lines.
+ */
+function parseVtt(vtt: string): string {
+  const lines = vtt.split("\n");
+  const textLines: string[] = [];
+  let prevLine = "";
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Skip WEBVTT header, empty lines, NOTE/STYLE blocks, and timestamp lines
+    if (
+      !trimmed ||
+      trimmed === "WEBVTT" ||
+      trimmed.startsWith("NOTE") ||
+      trimmed.startsWith("STYLE") ||
+      /^\d{2}:\d{2}/.test(trimmed) ||
+      /-->/.test(trimmed)
+    ) {
+      continue;
+    }
+
+    // Strip VTT inline tags: <c>, </c>, <00:00:00.000>, <b>, etc.
+    const clean = trimmed
+      .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
+      .replace(/<[^>]+>/g, "")
+      .trim();
+
+    // Deduplicate consecutive identical lines (common in auto-generated captions)
+    if (clean && clean !== prevLine) {
+      textLines.push(clean);
+      prevLine = clean;
+    }
+  }
+
+  return textLines.join(" ");
+}
 
 /**
  * YouTube adapter — 透過 yt-dlp 取得影片資訊與字幕
@@ -29,55 +71,70 @@ const youtubeAdapter: Adapter = {
 
   async fetch(url: string, options?: AdapterOptions): Promise<FetchResult> {
     const timeout = options?.timeout ?? 30_000;
+    const lang = options?.lang ?? "en";
 
-    // 取得影片 metadata
-    const metaJson = await exec(
-      "yt-dlp",
-      ["--dump-json", "--no-download", url],
-      { timeout },
-    );
-    const meta = JSON.parse(metaJson);
+    // Temp directory to receive the .vtt subtitle file
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-sub-"));
 
-    // 嘗試取得字幕
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let meta: Record<string, any>;
     let transcript = "(No transcript available)";
+
     try {
-      const lang = options?.lang ?? "en";
-      const subResult = await exec(
+      // Single yt-dlp invocation: --dump-json writes metadata JSON to stdout
+      // while --write-auto-sub writes the .vtt file to tmpDir
+      const metaJson = await exec(
         "yt-dlp",
         [
+          "--dump-json",
           "--write-auto-sub",
-          "--sub-lang",
-          lang,
+          "--sub-lang", lang,
           "--skip-download",
-          "--sub-format",
-          "vtt",
-          "--print",
-          "%(requested_subtitles)j",
+          "--sub-format", "vtt",
+          "--output", path.join(tmpDir, "%(id)s"),
           url,
         ],
         { timeout },
       );
-      if (subResult.trim() !== "null" && subResult.trim() !== "NA") {
-        transcript = subResult.trim();
+      meta = JSON.parse(metaJson);
+
+      // Read the generated .vtt file (yt-dlp names it <id>.<lang>.vtt)
+      try {
+        const files = await fs.readdir(tmpDir);
+        const vttFile = files.find((f) => f.endsWith(".vtt"));
+        if (vttFile) {
+          const vttContent = await fs.readFile(
+            path.join(tmpDir, vttFile),
+            "utf-8",
+          );
+          const parsed = parseVtt(vttContent);
+          if (parsed.trim()) {
+            transcript = parsed;
+          }
+        }
+      } catch {
+        // Subtitles unavailable for this video — keep default message
       }
-    } catch {
-      // 字幕不可用，保持預設值
+    } finally {
+      // Always clean up the temp directory
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => void 0);
     }
 
-    const duration = meta.duration
-      ? `${Math.floor(meta.duration / 60)}:${String(meta.duration % 60).padStart(2, "0")}`
+    const durationSecs = meta["duration"] as number | undefined;
+    const duration = durationSecs
+      ? `${Math.floor(durationSecs / 60)}:${String(durationSecs % 60).padStart(2, "0")}`
       : "unknown";
 
     const content = [
-      `# ${meta.title}`,
+      `# ${meta["title"] as string}`,
       "",
-      `**Channel:** ${meta.channel ?? meta.uploader ?? "unknown"}`,
+      `**Channel:** ${(meta["channel"] ?? meta["uploader"] ?? "unknown") as string}`,
       `**Duration:** ${duration}`,
-      `**Views:** ${meta.view_count?.toLocaleString() ?? "unknown"}`,
-      `**Published:** ${meta.upload_date ?? "unknown"}`,
+      `**Views:** ${((meta["view_count"] as number | undefined)?.toLocaleString() ?? "unknown")}`,
+      `**Published:** ${(meta["upload_date"] ?? "unknown") as string}`,
       "",
       "## Description",
-      (meta.description ?? "").slice(0, 2000),
+      ((meta["description"] as string | undefined) ?? "").slice(0, 2000),
       "",
       "## Transcript",
       transcript,
@@ -88,12 +145,12 @@ const youtubeAdapter: Adapter = {
       platform: "youtube",
       content,
       metadata: {
-        title: meta.title,
-        channel: meta.channel ?? meta.uploader,
-        duration: meta.duration,
-        viewCount: meta.view_count,
-        uploadDate: meta.upload_date,
-        thumbnailUrl: meta.thumbnail,
+        title: meta["title"],
+        channel: meta["channel"] ?? meta["uploader"],
+        duration: meta["duration"],
+        viewCount: meta["view_count"],
+        uploadDate: meta["upload_date"],
+        thumbnailUrl: meta["thumbnail"],
       },
       contentType: "video",
       fetchedAt: new Date().toISOString(),

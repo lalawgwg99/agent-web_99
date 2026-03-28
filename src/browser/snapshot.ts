@@ -1,3 +1,4 @@
+import yaml from "yaml";
 import { RefMap } from "./ref-map.js";
 
 /**
@@ -71,87 +72,120 @@ export async function takeSnapshot(
   };
 }
 
+interface ParsedNodeKey {
+  role: string;
+  name: string;
+  level?: number;
+  checked?: boolean;
+  disabled: boolean;
+}
+
 /**
- * 解析 ariaSnapshot() 回傳的 YAML 格式
- * 格式範例：
- *   - heading "Example Domain" [level=1]
- *   - link "Learn more":
- *     - /url: https://example.com
+ * Parse a single ARIA node key string, e.g.:
+ *   heading "Example Domain" [level=1]
+ *   link "Learn more"
+ *   checkbox "Option" [checked]
+ *   textbox "Search" [disabled]
  */
-function parseAriaYaml(
-  yaml: string,
+function parseNodeKey(key: string): ParsedNodeKey | null {
+  const trimmed = key.trim();
+  if (!trimmed) return null;
+
+  const roleMatch = trimmed.match(/^(\w+)(.*)/);
+  if (!roleMatch) return null;
+
+  const role = roleMatch[1]!;
+  let rest = roleMatch[2]!.trim();
+
+  // Skip ARIA metadata entries like /url
+  if (role.startsWith("/")) return null;
+
+  // Parse name (quoted string after role)
+  let name = "";
+  const nameMatch = rest.match(/^"(.+?)"/);
+  if (nameMatch) {
+    name = nameMatch[1]!;
+    rest = rest.slice(nameMatch[0].length).trim();
+  } else if (rest.startsWith(":")) {
+    // "- role: text" format
+    name = rest.slice(1).trim();
+    rest = "";
+  }
+
+  // Parse attributes [level=N], [checked], [unchecked], [disabled]
+  let level: number | undefined;
+  let checked: boolean | undefined;
+  let disabled = false;
+
+  const attrMatches = rest.match(/\[([^\]]+)\]/g);
+  if (attrMatches) {
+    for (const attr of attrMatches) {
+      const inner = attr.slice(1, -1);
+      if (inner.startsWith("level=")) {
+        level = parseInt(inner.slice(6), 10);
+      } else if (inner === "checked") {
+        checked = true;
+      } else if (inner === "unchecked") {
+        checked = false;
+      } else if (inner === "disabled") {
+        disabled = true;
+      }
+    }
+  }
+
+  return { role, name, level, checked, disabled };
+}
+
+/**
+ * Recursively process a list of items produced by yaml.parse() into SnapshotNodes.
+ * Each item is either:
+ *   - a string  (leaf node: "heading \"Title\" [level=1]")
+ *   - an object (node with children: { 'link "Text"': [...children] })
+ */
+function processItems(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  items: any[],
   refMap: RefMap,
   interactiveOnly: boolean,
 ): SnapshotNode[] {
-  const lines = yaml.split("\n");
-  const root: SnapshotNode[] = [];
-  const stack: { indent: number; children: SnapshotNode[] }[] = [
-    { indent: -1, children: root },
-  ];
+  const result: SnapshotNode[] = [];
 
-  for (const line of lines) {
-    // Skip empty lines and metadata lines (like /url:)
-    if (!line.trim() || line.trim().startsWith("/")) continue;
+  for (const item of items) {
+    if (item === null || item === undefined) continue;
 
-    const match = line.match(/^(\s*)- (\w+)(.*)/);
-    if (!match) continue;
+    let nodeKey: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let childItems: any[] | undefined;
 
-    const indent = match[1]!.length;
-    const role = match[2]!;
-    let rest = match[3]!.trim();
-
-    // Skip metadata entries
-    if (role === "text" && rest.startsWith(":")) continue;
-
-    // Parse name (quoted string after role)
-    let name = "";
-    const nameMatch = rest.match(/^"(.+?)"/);
-    if (nameMatch) {
-      name = nameMatch[1]!;
-      rest = rest.slice(nameMatch[0].length).trim();
-    } else if (rest.startsWith(":")) {
-      // "- text: Some text" format
-      name = rest.slice(1).trim();
-      rest = "";
+    if (typeof item === "string") {
+      nodeKey = item;
+    } else if (typeof item === "object" && !Array.isArray(item)) {
+      const keys = Object.keys(item);
+      if (keys.length === 0) continue;
+      nodeKey = keys[0]!;
+      // Skip ARIA metadata entries (e.g. /url, /value)
+      if (nodeKey.startsWith("/")) continue;
+      const childVal = (item as Record<string, unknown>)[nodeKey];
+      childItems = Array.isArray(childVal) ? childVal : undefined;
+    } else {
+      continue;
     }
 
-    // Parse attributes like [level=1], [checked], [disabled]
-    let level: number | undefined;
-    let checked: boolean | undefined;
-    let disabled = false;
+    const parsed = parseNodeKey(nodeKey);
+    if (!parsed) continue;
 
-    const attrMatch = rest.match(/\[([^\]]+)\]/g);
-    if (attrMatch) {
-      for (const attr of attrMatch) {
-        const inner = attr.slice(1, -1);
-        if (inner.startsWith("level=")) {
-          level = parseInt(inner.slice(6), 10);
-        } else if (inner === "checked") {
-          checked = true;
-        } else if (inner === "unchecked") {
-          checked = false;
-        } else if (inner === "disabled") {
-          disabled = true;
-        }
-      }
-    }
-
+    const { role, name, level, checked, disabled } = parsed;
     const isInteractive = INTERACTIVE_ROLES.has(role);
 
     if (interactiveOnly && !isInteractive) {
-      // Non-interactive: we still need to track indent for tree structure,
-      // but won't add a node. Its children may be interactive though.
-      // Add a transparent container
-      while (stack.length > 1 && stack[stack.length - 1]!.indent >= indent) {
-        stack.pop();
+      // Don't add this node, but still recurse to find interactive children
+      if (childItems && childItems.length > 0) {
+        result.push(...processItems(childItems, refMap, interactiveOnly));
       }
-      // Push a virtual container so interactive children get added to parent
-      stack.push({ indent, children: stack[stack.length - 1]!.children });
       continue;
     }
 
     const ref = isInteractive ? refMap.assign(role, name) : "";
-
     const node: SnapshotNode = {
       ref,
       role,
@@ -161,36 +195,40 @@ function parseAriaYaml(
       ...(disabled && { disabled }),
     };
 
-    // Find the correct parent based on indentation
-    while (stack.length > 1 && stack[stack.length - 1]!.indent >= indent) {
-      stack.pop();
-    }
-
-    const parent = stack[stack.length - 1]!;
-    parent.children.push(node);
-
-    // This node can be a parent for deeper-indented nodes
-    const nodeChildren: SnapshotNode[] = [];
-    node.children = nodeChildren;
-    stack.push({ indent, children: nodeChildren });
-  }
-
-  // Clean up: remove empty children arrays
-  cleanEmptyChildren(root);
-
-  return root;
-}
-
-function cleanEmptyChildren(nodes: SnapshotNode[]): void {
-  for (const node of nodes) {
-    if (node.children) {
-      if (node.children.length === 0) {
-        delete node.children;
-      } else {
-        cleanEmptyChildren(node.children);
+    if (childItems && childItems.length > 0) {
+      const childNodes = processItems(childItems, refMap, interactiveOnly);
+      if (childNodes.length > 0) {
+        node.children = childNodes;
       }
     }
+
+    result.push(node);
   }
+
+  return result;
+}
+
+/**
+ * Parse the ARIA YAML string returned by ariaSnapshot() using the 'yaml' package
+ * for robust structure parsing, then walk the resulting tree to extract nodes
+ * and assign @ref identifiers to interactive elements.
+ */
+function parseAriaYaml(
+  yamlStr: string,
+  refMap: RefMap,
+  interactiveOnly: boolean,
+): SnapshotNode[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let parsed: any;
+  try {
+    parsed = yaml.parse(yamlStr);
+  } catch {
+    // Graceful fallback if YAML parsing fails for any reason
+    return [];
+  }
+
+  if (!Array.isArray(parsed)) return [];
+  return processItems(parsed, refMap, interactiveOnly);
 }
 
 /**

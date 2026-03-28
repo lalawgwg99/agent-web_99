@@ -58,16 +58,28 @@ export async function performAction(options: ActionOptions): Promise<string> {
     }
 
     case "scroll": {
-      const direction = value ?? "down";
+      // Support "direction:amount" format (e.g. "down:1000", "up:500")
+      // Plain direction string (e.g. "down") uses default 500px
+      let direction = value ?? "down";
+      let amount = 500;
+
+      if (direction.includes(":")) {
+        const colonIdx = direction.indexOf(":");
+        const amtStr = direction.slice(colonIdx + 1);
+        direction = direction.slice(0, colonIdx);
+        const parsed = parseInt(amtStr, 10);
+        if (!isNaN(parsed) && parsed > 0) amount = parsed;
+      }
+
       const scrollMap: Record<string, [number, number]> = {
-        up: [0, -500],
-        down: [0, 500],
-        left: [-500, 0],
-        right: [500, 0],
+        up: [0, -amount],
+        down: [0, amount],
+        left: [-amount, 0],
+        right: [amount, 0],
       };
-      const [x, y] = scrollMap[direction] ?? [0, 500];
+      const [x, y] = scrollMap[direction] ?? [0, amount];
       await page.mouse.wheel(x, y);
-      return `Scrolled ${direction}`;
+      return `Scrolled ${direction} by ${amount}px`;
     }
 
     default:

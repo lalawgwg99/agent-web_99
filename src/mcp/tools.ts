@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Router } from "../core/router.js";
-import { getSession, hasSession, setupResourceBlocking, unblockResources } from "../browser/manager.js";
+import { getSession, closeSession, hasSession, setupResourceBlocking, unblockResources } from "../browser/manager.js";
 import { takeSnapshot } from "../browser/snapshot.js";
 import { performAction, type ActionType } from "../browser/actions.js";
 import { RefMap } from "../browser/ref-map.js";
@@ -166,22 +166,20 @@ export function getTools(): ToolDef[] {
       description:
         "Get accessibility tree snapshot of current page with @ref element references. Use after navigation or DOM changes to get fresh refs.",
       inputSchema: z.object({
-        interactiveOnly: z
-          .boolean()
-          .optional()
-          .default(true)
-          .describe("Only show interactive elements (ignored when mode=readable)"),
         mode: z
-          .enum(["interactive", "readable"])
+          .enum(["interactive", "readable", "full"])
           .optional()
           .default("interactive")
-          .describe("Extraction mode: 'interactive' for ARIA tree with @refs, 'readable' for clean article text"),
+          .describe(
+            "Extraction mode: 'interactive' (default) shows only interactive elements with @refs; " +
+            "'full' shows the entire ARIA tree including non-interactive nodes; " +
+            "'readable' extracts clean article text via Readability.",
+          ),
         session: z.string().optional().default("default"),
       }),
       annotations: { readOnlyHint: true },
       handler: async (input) => {
-        const { interactiveOnly, mode, session: sessionName } = input as {
-          interactiveOnly: boolean;
+        const { mode, session: sessionName } = input as {
           mode: string;
           session: string;
         };
@@ -219,6 +217,9 @@ export function getTools(): ToolDef[] {
           return { content: [{ type: "text", text: output }] };
         }
 
+        // 'interactive' = only interactive ARIA roles; 'full' = entire tree
+        const interactiveOnly = mode !== "full";
+
         const refMap = getRefMap(sessionName);
         const snapshot = await takeSnapshot(browserSession.page, refMap, {
           interactiveOnly,
@@ -252,7 +253,8 @@ export function getTools(): ToolDef[] {
           .string()
           .optional()
           .describe(
-            "Text for fill/select, key for press, direction for scroll",
+            "Text for fill/select, key for press. For scroll: direction ('up'/'down'/'left'/'right') " +
+            "or direction with amount ('down:1000', 'up:500'). Default scroll amount is 500px.",
           ),
         session: z.string().optional().default("default"),
       }),
@@ -303,12 +305,21 @@ export function getTools(): ToolDef[] {
         "Take a screenshot of the current browser page. Returns base64 PNG image.",
       inputSchema: z.object({
         fullPage: z.boolean().optional().default(false),
+        reload: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "If true, temporarily unblocks resources and reloads the page before screenshotting " +
+            "to capture images/fonts/media. Slower but produces a fully-rendered visual.",
+          ),
         session: z.string().optional().default("default"),
       }),
       annotations: { readOnlyHint: true },
       handler: async (input) => {
-        const { fullPage, session: sessionName } = input as {
+        const { fullPage, reload, session: sessionName } = input as {
           fullPage: boolean;
+          reload: boolean;
           session: string;
         };
 
@@ -327,8 +338,8 @@ export function getTools(): ToolDef[] {
         const config = loadConfig();
         const hasBlocking = (config.browser.blockResources ?? []).length > 0;
 
-        // Temporarily unblock resources for visual screenshot
-        if (hasBlocking) {
+        // Only unblock + reload when the caller explicitly requests a fully-rendered shot
+        if (hasBlocking && reload) {
           await unblockResources(browserSession.page);
           await browserSession.page.reload({ waitUntil: "load" });
         }
@@ -336,8 +347,8 @@ export function getTools(): ToolDef[] {
         const buffer = await browserSession.page.screenshot({ fullPage });
         const base64 = buffer.toString("base64");
 
-        // Re-apply blocking after screenshot
-        if (hasBlocking) {
+        // Re-apply blocking after screenshot if we temporarily lifted it
+        if (hasBlocking && reload) {
           await setupResourceBlocking(browserSession.page, config.browser.blockResources);
         }
 
@@ -357,6 +368,30 @@ export function getTools(): ToolDef[] {
         const report = await runDoctor();
         return {
           content: [{ type: "text", text: formatDoctorReport(report) }],
+        };
+      },
+    },
+
+    // Tool 7: web_close
+    {
+      name: "web_close",
+      description:
+        "Close the current browser session and release all associated resources. " +
+        "In CDP mode this only closes the page (not the user's Chrome). " +
+        "Call this when you are done with browser automation to free memory.",
+      inputSchema: z.object({
+        session: z
+          .string()
+          .optional()
+          .default("default")
+          .describe("Session name to close (defaults to 'default')"),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false },
+      handler: async (input) => {
+        const { session: sessionName } = input as { session: string };
+        await closeSession(sessionName);
+        return {
+          content: [{ type: "text", text: `Browser session "${sessionName}" closed.` }],
         };
       },
     },

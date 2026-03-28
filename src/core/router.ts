@@ -1,25 +1,33 @@
 import type { Adapter, AdapterOptions, FetchResult } from "../adapters/types.js";
-import { AdapterRegistry, loadBuiltinAdapters } from "../adapters/registry.js";
+import { AdapterRegistry, getBuiltinRegistry } from "../adapters/registry.js";
 
 /**
  * 智慧路由器
  * URL 進來 → 自動選最佳 Adapter → 失敗自動降級
  */
 export class Router {
-  private registry: AdapterRegistry;
+  private registry: AdapterRegistry | null;
   private initialized = false;
 
   constructor(registry?: AdapterRegistry) {
-    this.registry = registry ?? new AdapterRegistry();
+    // If a custom registry is provided use it directly (and mark as initialized);
+    // otherwise we'll lazily load the shared builtin singleton on first use.
+    if (registry) {
+      this.registry = registry;
+      this.initialized = true;
+    } else {
+      this.registry = null;
+    }
   }
 
   async init(): Promise<void> {
     if (this.initialized) return;
-    await loadBuiltinAdapters(this.registry);
+    this.registry = await getBuiltinRegistry();
     this.initialized = true;
   }
 
   getRegistry(): AdapterRegistry {
+    if (!this.registry) throw new Error("Router not yet initialized");
     return this.registry;
   }
 
@@ -27,10 +35,11 @@ export class Router {
    * 解析 URL → 主要 adapter + 備用 adapters
    */
   resolve(url: string): { primary: Adapter; fallbacks: Adapter[] } {
-    const matches = this.registry.match(url);
+    const registry = this.getRegistry();
+    const matches = registry.match(url);
 
     if (matches.length === 0) {
-      const jina = this.registry.getByName("jina");
+      const jina = registry.getByName("jina");
       if (!jina) throw new Error("No adapters available");
       return { primary: jina, fallbacks: [] };
     }
@@ -45,7 +54,8 @@ export class Router {
    * 智慧抓取：自動選 adapter + 失敗自動降級
    */
   async fetch(url: string, options?: AdapterOptions): Promise<FetchResult> {
-    await this.init();
+    // Inline flag check avoids async overhead on every call after init
+    if (!this.initialized) await this.init();
 
     const { primary, fallbacks } = this.resolve(url);
     const errors: Error[] = [];
@@ -80,9 +90,10 @@ export class Router {
     url: string,
     options?: AdapterOptions,
   ): Promise<FetchResult> {
-    await this.init();
+    // Inline flag check avoids async overhead on every call after init
+    if (!this.initialized) await this.init();
 
-    const adapter = this.registry.getByName(adapterName);
+    const adapter = this.getRegistry().getByName(adapterName);
     if (!adapter) {
       throw new Error(`Adapter "${adapterName}" not found`);
     }

@@ -6,7 +6,7 @@
   "author": "lalawgwg99",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lalawgwg99/agent-web.git"
+    "url": "https://github.com/lalawgwg99/agent-web_99.git"
   },
   "keywords": [
     "mcp",
@@ -20,15 +20,15 @@
     "cursor"
   ],
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/lib/index.js",
+  "types": "./dist/lib/index.d.ts",
   "bin": {
     "agent-web": "dist/bin/agent-web.js"
   },
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "import": "./dist/lib/index.js",
+      "types": "./dist/lib/index.d.ts"
     }
   },
   "files": [
@@ -60,6 +60,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.21",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.1"

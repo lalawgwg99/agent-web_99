@@ -36,6 +36,31 @@ export class AdapterRegistry {
 }
 
 /**
+ * Module-level singleton: reuse the same fully-loaded registry across all
+ * Router instances so loadBuiltinAdapters is only called once per process.
+ */
+let _builtinRegistry: AdapterRegistry | null = null;
+let _loadingPromise: Promise<AdapterRegistry> | null = null;
+
+/**
+ * Return (and lazily create) the shared builtin AdapterRegistry singleton.
+ * Safe to call concurrently — only one load will ever run.
+ */
+export async function getBuiltinRegistry(): Promise<AdapterRegistry> {
+  if (_builtinRegistry) return _builtinRegistry;
+  if (_loadingPromise) return _loadingPromise;
+
+  _loadingPromise = (async () => {
+    const registry = new AdapterRegistry();
+    await loadBuiltinAdapters(registry);
+    _builtinRegistry = registry;
+    return registry;
+  })();
+
+  return _loadingPromise;
+}
+
+/**
  * 載入所有內建 adapters（lazy import 避免載入不需要的依賴）
  */
 export async function loadBuiltinAdapters(

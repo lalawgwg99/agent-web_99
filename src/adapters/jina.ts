@@ -60,21 +60,17 @@ export const jinaAdapter: Adapter = {
 
   async check(): Promise<AdapterHealth> {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5_000);
-      try {
-        const res = await fetch("https://r.jina.ai/https://example.com", {
-          signal: controller.signal,
-        });
-        return {
-          name: "jina",
-          installed: true,
-          configured: res.ok,
-          ...(!res.ok && { error: `HTTP ${res.status}` }),
-        };
-      } finally {
-        clearTimeout(timeout);
-      }
+      // Use a lightweight HEAD request to avoid downloading page content
+      const resp = await fetch("https://r.jina.ai/", {
+        method: "HEAD",
+        signal: AbortSignal.timeout(3_000),
+      });
+      return {
+        name: "jina",
+        installed: true,
+        configured: resp.ok || resp.status < 500,
+        ...(!resp.ok && resp.status >= 500 && { error: `HTTP ${resp.status}` }),
+      };
     } catch {
       return {
         name: "jina",

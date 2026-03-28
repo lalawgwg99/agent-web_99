@@ -1,5 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AdapterHealth } from "../adapters/types.js";
 import { AdapterRegistry, loadBuiltinAdapters } from "../adapters/registry.js";
+
+// Read version dynamically from package.json to stay in sync with releases
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "../../package.json"), "utf-8"),
+) as { version: string };
+const agentVersion = pkg.version;
 
 export interface DoctorReport {
   nodeVersion: string;
@@ -47,7 +57,7 @@ export async function runDoctor(): Promise<DoctorReport> {
 export function formatDoctorReport(report: DoctorReport): string {
   const lines: string[] = [];
 
-  lines.push("agent-web v0.1.0 Diagnostics");
+  lines.push(`agent-web v${agentVersion} Diagnostics`);
   lines.push("=".repeat(35));
   lines.push("");
   lines.push("Core:");

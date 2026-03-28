@@ -211,10 +211,12 @@ export async function closeSession(name = "default"): Promise<void> {
   if (!session) return;
 
   if (session.isCDP) {
-    // Only close the page we created; browser.close() disconnects without killing Chrome
+    // CDP mode: only close the page we created; do NOT call browser.close()
+    // as that would disconnect (and potentially kill) the user's Chrome instance
     await session.page.close();
+  } else {
+    await session.browser.close();
   }
-  await session.browser.close();
   sessions.delete(name);
 }
 

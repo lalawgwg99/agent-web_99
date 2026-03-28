@@ -48,6 +48,31 @@ function getConfigPath(): string {
   return path.join(getConfigDir(), "config.yaml");
 }
 
+/**
+ * Deep merge: sub-objects are merged recursively so partial user configs
+ * (e.g. only setting browser.headless) preserve all other nested defaults.
+ * Arrays and primitives from `override` always win.
+ */
+function deepMerge<T extends object>(base: T, override: Partial<T>): T {
+  const result = { ...base } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(override)) {
+    if (
+      value !== null &&
+      value !== undefined &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      typeof result[key] === "object" &&
+      result[key] !== null &&
+      !Array.isArray(result[key])
+    ) {
+      result[key] = deepMerge(result[key] as object, value as object);
+    } else if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result as T;
+}
+
 export function loadConfig(): AgentWebConfig {
   const configPath = getConfigPath();
   if (!fs.existsSync(configPath)) {
@@ -57,7 +82,8 @@ export function loadConfig(): AgentWebConfig {
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = parseYaml(raw) as Partial<AgentWebConfig>;
-    return { ...DEFAULT_CONFIG, ...parsed };
+    // Deep merge so partial user configs preserve nested defaults
+    return deepMerge(DEFAULT_CONFIG, parsed);
   } catch {
     return { ...DEFAULT_CONFIG };
   }

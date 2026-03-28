@@ -27,11 +27,12 @@ export async function exec(
 }
 
 /**
- * 檢查命令是否存在
+ * 檢查命令是否存在（Windows 用 'where'，其他平台用 'which'）
  */
 export async function commandExists(command: string): Promise<boolean> {
   try {
-    await execFileAsync("which", [command]);
+    const cmd = process.platform === "win32" ? "where" : "which";
+    await execFileAsync(cmd, [command]);
     return true;
   } catch {
     return false;

@@ -11,6 +11,40 @@ import { getTools } from "./tools.js";
  * 用法：agent-web serve
  * 或 npx agent-web serve
  */
+
+/**
+ * Map a Zod schema instance to its JSON Schema type string.
+ * Unwraps ZodOptional / ZodDefault / ZodNullable wrappers before inspecting.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function zodTypeToJsonSchemaType(schema: any): string {
+  const typeName = schema?._def?.typeName as string | undefined;
+  // Unwrap wrapper types to reach the inner type
+  if (
+    typeName === "ZodOptional" ||
+    typeName === "ZodDefault" ||
+    typeName === "ZodNullable"
+  ) {
+    return zodTypeToJsonSchemaType(
+      schema._def.innerType ?? schema._def.defaultValue,
+    );
+  }
+  switch (typeName) {
+    case "ZodString":
+      return "string";
+    case "ZodNumber":
+      return "number";
+    case "ZodBoolean":
+      return "boolean";
+    case "ZodArray":
+      return "array";
+    case "ZodObject":
+      return "object";
+    default:
+      return "string";
+  }
+}
+
 export async function startServer(): Promise<void> {
   const server = new Server(
     {
@@ -39,7 +73,10 @@ export async function startServer(): Promise<void> {
               (tool.inputSchema as { shape?: Record<string, unknown> }).shape ?? {},
             ).map(([key, schema]) => [
               key,
-              { type: "string", description: (schema as { description?: string }).description },
+              {
+                type: zodTypeToJsonSchemaType(schema),
+                description: (schema as { description?: string }).description,
+              },
             ]),
           ),
         },
